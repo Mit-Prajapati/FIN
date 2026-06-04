@@ -652,11 +652,7 @@ input, select {
 .chart-container {
   position: relative;
   width: 100%;
-}
-
-.chart-container canvas {
-  width: 100%;
-  height: 260px;
+  height: 280px;
 }
 
 .donut-container {
@@ -958,6 +954,179 @@ input, select {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* === Smart Alerts Banner === */
+.smart-alerts-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px 16px;
+  padding-right: 40px;
+  background: var(--expense-bg);
+  border: 1px solid rgba(255, 59, 48, 0.12);
+  border-radius: var(--radius-md);
+  margin-bottom: 20px;
+  position: relative;
+  animation: slideDown 0.3s ease;
+}
+
+.alert-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 20px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.alert-warning {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.alert-critical {
+  background: var(--expense-bg);
+  color: var(--expense);
+}
+
+.alert-dismiss-btn {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  font-size: 1.25rem;
+  color: var(--text-tertiary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: color 0.15s ease;
+}
+
+.alert-dismiss-btn:hover {
+  color: var(--text-primary);
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* === AI Prediction Card === */
+.ai-prediction-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.ai-prediction-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #5B8DEF, #BB6BD9, #F2994A);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+
+.ai-stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.ai-stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ai-stat-icon {
+  font-size: 1.25rem;
+  margin-bottom: 2px;
+}
+
+.ai-stat-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ai-stat-value {
+  font-size: 1.375rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+/* === Confidence Badge === */
+.confidence-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: var(--accent-light);
+  color: var(--accent);
+  letter-spacing: 0.02em;
+}
+
+.confidence-badge[data-confidence="high"] {
+  background: var(--income-bg);
+  color: var(--income);
+}
+
+.confidence-badge[data-confidence="medium"] {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.confidence-badge[data-confidence="low"] {
+  background: var(--expense-bg);
+  color: var(--expense);
+}
+
+/* === AI Insights List === */
+.ai-insights-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.insight-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  line-height: 1.55;
+  transition: background-color 0.15s ease;
+}
+
+.insight-item:hover {
+  background: var(--bg-input);
+}
+
+.insight-icon {
+  flex-shrink: 0;
+  font-size: 1rem;
+  line-height: 1.55;
+}
+
+.insight-message {
+  flex: 1;
+  color: var(--text-primary);
+}
+
+.insight-success .insight-message { color: var(--income); }
+.insight-warning .insight-message { color: var(--warning); }
+
 /* ============================================================
    RESPONSIVE DESIGN
    ============================================================ */
@@ -1086,6 +1255,11 @@ input, select {
 
   /* Transaction actions always visible on mobile */
   .txn-actions { opacity: 1; }
+
+  /* AI sections mobile */
+  .ai-stat-grid { gap: 16px; }
+  .ai-stat-value { font-size: 1.125rem; }
+  .smart-alerts-bar { flex-direction: column; align-items: flex-start; }
 }
 
 /* Small mobile */
@@ -1098,4 +1272,5 @@ input, select {
   }
 
   .modal { padding: 20px; }
+  .ai-stat-grid { grid-template-columns: 1fr; }
 }

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="Personal Finance Manager — Track income, expenses, budgets, and savings with a clean, professional interface.">
   <title>FinTrack — Personal Finance Manager</title>
-  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'><rect width='40' height='40' rx='10' fill='%23007aff'/><path d='M12 28V18h4v10h-4zm6 0V12h4v16h-4zm6 0V22h4v6h-4z' fill='%23fff'/></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -101,6 +101,9 @@
 
       <!-- ===== DASHBOARD PAGE ===== -->
       <section id="dashboard-page" class="page">
+        <!-- Smart Alerts Banner -->
+        <div id="smart-alerts" class="smart-alerts-bar hidden"></div>
+
         <!-- Summary Cards -->
         <div class="summary-cards">
           <div class="summary-card balance-card">
@@ -142,6 +145,48 @@
           </div>
           <div id="dash-top-category-content">
             <p class="text-secondary">No expenses recorded yet</p>
+          </div>
+        </div>
+
+        <!-- AI Prediction Card -->
+        <div class="card ai-prediction-card">
+          <div class="card-header">
+            <h3>🤖 AI Prediction</h3>
+            <span class="confidence-badge" id="ai-confidence">—</span>
+          </div>
+          <div class="ai-stat-grid" id="ai-prediction-content">
+            <div class="ai-stat-item">
+              <div class="ai-stat-icon">📈</div>
+              <div class="ai-stat-label">Predicted Expense</div>
+              <div class="ai-stat-value" id="ai-predicted-expense">₹0</div>
+            </div>
+            <div class="ai-stat-item">
+              <div class="ai-stat-icon">🎯</div>
+              <div class="ai-stat-label">Recommended Budget</div>
+              <div class="ai-stat-value" id="ai-recommended-budget">₹0</div>
+            </div>
+            <div class="ai-stat-item">
+              <div class="ai-stat-icon">💰</div>
+              <div class="ai-stat-label">Savings Forecast</div>
+              <div class="ai-stat-value" id="ai-savings-forecast">₹0</div>
+            </div>
+            <div class="ai-stat-item">
+              <div class="ai-stat-icon">📊</div>
+              <div class="ai-stat-label">Avg Monthly Expense</div>
+              <div class="ai-stat-value" id="ai-avg-expense">₹0</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- AI Financial Insights -->
+        <div class="card">
+          <div class="card-header">
+            <h3>🧠 AI Financial Insights</h3>
+          </div>
+          <div id="ai-insights-content" class="ai-insights-list">
+            <div class="empty-state">
+              <p>Add transactions to receive AI insights</p>
+            </div>
           </div>
         </div>
 
@@ -222,8 +267,16 @@
           </div>
         </div>
 
-        <!-- Charts Row -->
+        <!-- Charts Row 1: Trend + Income vs Expenses -->
         <div class="charts-row">
+          <div class="card chart-card">
+            <div class="card-header">
+              <h3>Expense Trend</h3>
+            </div>
+            <div class="chart-container">
+              <canvas id="trend-chart"></canvas>
+            </div>
+          </div>
           <div class="card chart-card">
             <div class="card-header">
               <h3>Income vs Expenses (6 Months)</h3>
@@ -232,13 +285,24 @@
               <canvas id="bar-chart"></canvas>
             </div>
           </div>
+        </div>
+
+        <!-- Charts Row 2: Breakdown + Prediction -->
+        <div class="charts-row" style="margin-top:16px">
           <div class="card chart-card">
             <div class="card-header">
               <h3>Expense Breakdown</h3>
             </div>
-            <div class="chart-container donut-container">
+            <div class="chart-container">
               <canvas id="donut-chart"></canvas>
-              <div id="donut-legend" class="donut-legend"></div>
+            </div>
+          </div>
+          <div class="card chart-card">
+            <div class="card-header">
+              <h3>Expense Prediction</h3>
+            </div>
+            <div class="chart-container">
+              <canvas id="prediction-chart"></canvas>
             </div>
           </div>
         </div>
@@ -368,6 +432,8 @@
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="ai-engine.js"></script>
   <script src="script.js"></script>
 </body>
 </html>

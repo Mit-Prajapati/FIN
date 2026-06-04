@@ -62,6 +62,10 @@ let state = {
   theme: 'light'
 };
 
+// Chart.js instances (for proper lifecycle management)
+let chartInstances = {};
+let aiAnalysis = null;
+
 // ===== STORAGE — LocalStorage persistence =====
 
 /** Save a specific key to localStorage */
@@ -90,6 +94,7 @@ function persistState() {
   saveToStorage(STORAGE_KEYS.transactions, state.transactions);
   saveToStorage(STORAGE_KEYS.budget, state.budget);
   saveToStorage(STORAGE_KEYS.theme, state.theme);
+  runAIAnalysis();
 }
 
 /** Load state from storage */
@@ -105,8 +110,7 @@ function loadState() {
 /** Format number as Indian currency */
 function formatCurrency(amount) {
   const num = Math.abs(amount);
-  const sign = amount < 0 ? '-' : '';
-  return sign + '₹' + num.toLocaleString('en-IN', {
+  return '₹' + num.toLocaleString('en-IN', {
     minimumFractionDigits: 0,
     maximumFractionDigits: 2
   });
@@ -155,6 +159,20 @@ function totalExpenses(txns) {
   return txns.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
 }
 
+// ===== AI HELPERS =====
+
+/** Get category label for AI engine bridge */
+function getCatLabel(id) {
+  return getCategoryById(id).label;
+}
+
+/** Run full AI analysis and update global state */
+function runAIAnalysis() {
+  if (typeof AIEngine !== 'undefined') {
+    aiAnalysis = AIEngine.runFullAnalysis(state.transactions, state.budget, getCatLabel);
+  }
+}
+
 // ===== THEME =====
 
 function applyTheme(theme) {
@@ -178,9 +196,12 @@ function applyTheme(theme) {
 
 function toggleTheme() {
   applyTheme(state.theme === 'light' ? 'dark' : 'light');
-  // Redraw charts if on analytics page
+  // Redraw charts — they need updated theme colors
   if (state.currentPage === 'analytics') {
     renderAnalytics();
+  }
+  if (state.currentPage === 'dashboard') {
+    renderDashboard();
   }
 }
 
@@ -256,26 +277,15 @@ function handleLogin(e) {
 
   // Check if returning user
   const existingUser = loadFromStorage(STORAGE_KEYS.user);
-
-  if (existingUser && name === existingUser.name) {
-    // Exact match for existing user — verify PIN
+  if (existingUser && existingUser.pin) {
+    // Returning user — verify PIN
     if (existingUser.pin !== pin) {
-      errorEl.textContent = 'Incorrect PIN for ' + name + '. Please try again.';
+      errorEl.textContent = 'Incorrect PIN. Please try again.';
       return;
     }
     state.user = existingUser;
   } else {
-    // New user OR different name
-    if (existingUser && existingUser.name !== name) {
-      const confirmSwitch = confirm(`Switching to "${name}" will start a new session. Your previous data (for ${existingUser.name}) will be cleared. Proceed?`);
-      if (!confirmSwitch) return;
-
-      // Clear old data for new user
-      state.transactions = [];
-      state.budget = 0;
-      localStorage.removeItem(STORAGE_KEYS.transactions);
-      localStorage.removeItem(STORAGE_KEYS.budget);
-    }
+    // New user
     state.user = { name, pin };
   }
 
@@ -322,6 +332,11 @@ function renderDashboard() {
 
   // Recent transactions
   renderRecentTransactions();
+
+  // AI-powered sections
+  renderSmartAlerts();
+  renderAIPrediction();
+  renderAIInsights();
 }
 
 function renderDashboardBudget() {
@@ -342,12 +357,9 @@ function renderDashboardBudget() {
 
   let fillClass = '';
   let warningHtml = '';
-  if (spent > state.budget) {
+  if (pct >= 100) {
     fillClass = 'danger';
     warningHtml = `<div class="budget-warning">⚠️ You've exceeded your monthly budget by ${formatCurrency(Math.abs(remaining))}</div>`;
-  } else if (spent === state.budget) {
-    fillClass = 'danger';
-    warningHtml = `<div class="budget-warning">⚠️ You've reached your monthly budget limit!</div>`;
   } else if (pct >= 80) {
     fillClass = 'warning';
     warningHtml = `<div class="budget-warning soft-warning">⚡ You've used ${Math.round(pct)}% of your budget</div>`;
@@ -541,10 +553,12 @@ function renderAnalytics() {
   savingsEl.textContent = (savings >= 0 ? '+' : '-') + formatCurrency(Math.abs(savings));
   savingsEl.style.color = savings >= 0 ? 'var(--income)' : 'var(--expense)';
 
-  // Draw charts
+  // Draw all Chart.js charts
   requestAnimationFrame(() => {
+    drawTrendChart();
     drawBarChart();
     drawDonutChart(month, year);
+    drawPredictionChart();
   });
 }
 
@@ -576,12 +590,9 @@ function renderBudget() {
 
   let fillClass = '';
   let warningHtml = '';
-  if (spent > state.budget) {
+  if (pct >= 100) {
     fillClass = 'danger';
     warningHtml = `<div class="budget-warning">⚠️ You've exceeded your monthly budget by ${formatCurrency(Math.abs(remaining))}</div>`;
-  } else if (spent === state.budget) {
-    fillClass = 'danger';
-    warningHtml = `<div class="budget-warning">⚠️ You've reached your monthly budget limit!</div>`;
   } else if (pct >= 80) {
     fillClass = 'warning';
     warningHtml = `<div class="budget-warning soft-warning">⚡ You've used ${Math.round(pct)}% of your budget. Slow down!</div>`;
@@ -638,33 +649,58 @@ function renderBudget() {
   }
 }
 
-// ===== CHARTS — Canvas Drawing =====
+// ===== CHARTS — Chart.js Integration =====
+
+/** Get themed color values from CSS custom properties */
+function getChartThemeColors() {
+  const s = getComputedStyle(document.documentElement);
+  return {
+    text:        s.getPropertyValue('--text-secondary').trim(),
+    textPrimary: s.getPropertyValue('--text-primary').trim(),
+    border:      s.getPropertyValue('--border-light').trim(),
+    income:      s.getPropertyValue('--income').trim(),
+    expense:     s.getPropertyValue('--expense').trim(),
+    accent:      s.getPropertyValue('--accent').trim(),
+    cardBg:      s.getPropertyValue('--bg-card').trim(),
+    inputBg:     s.getPropertyValue('--bg-input').trim()
+  };
+}
+
+/** Safely destroy a Chart.js instance by key */
+function destroyChart(key) {
+  if (chartInstances[key]) {
+    chartInstances[key].destroy();
+    delete chartInstances[key];
+  }
+}
+
+/** Common Chart.js font config */
+function chartFont(size, weight) {
+  return { family: "'Inter', sans-serif", size: size || 12, weight: weight || '500' };
+}
+
+/** Shared tooltip configuration */
+function chartTooltipConfig(colors) {
+  return {
+    backgroundColor: colors.cardBg,
+    titleColor: colors.textPrimary,
+    bodyColor: colors.text,
+    borderColor: colors.border,
+    borderWidth: 1,
+    cornerRadius: 8,
+    padding: 10,
+    titleFont: chartFont(12, '600'),
+    bodyFont: chartFont(12)
+  };
+}
 
 /** Draw bar chart: Income vs Expenses for the last 6 months */
 function drawBarChart() {
   const canvas = document.getElementById('bar-chart');
   if (!canvas) return;
+  destroyChart('bar');
 
-  const dpr = window.devicePixelRatio || 1;
-  const rect = canvas.parentElement.getBoundingClientRect();
-  canvas.width = rect.width * dpr;
-  canvas.height = 260 * dpr;
-  canvas.style.width = rect.width + 'px';
-  canvas.style.height = '260px';
-
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-
-  const width = rect.width;
-  const height = 260;
-
-  // Get styles for theming
-  const textColor = getComputedStyle(document.documentElement).getPropertyValue('--text-secondary').trim();
-  const borderColor = getComputedStyle(document.documentElement).getPropertyValue('--border-light').trim();
-  const incomeColor = getComputedStyle(document.documentElement).getPropertyValue('--income').trim();
-  const expenseColor = getComputedStyle(document.documentElement).getPropertyValue('--expense').trim();
-
-  // Gather 6 months of data
+  const colors = getChartThemeColors();
   const months = [];
   let m = state.analyticsMonth;
   let y = state.analyticsYear;
@@ -674,122 +710,99 @@ function drawBarChart() {
     if (m < 0) { m = 11; y--; }
   }
 
-  const data = months.map(({ month, year }) => {
+  const labels = [];
+  const incomeData = [];
+  const expenseData = [];
+  months.forEach(({ month, year }) => {
     const txns = getMonthlyTransactions(month, year);
-    return {
-      label: MONTH_NAMES[month].substr(0, 3),
-      income: totalIncome(txns),
-      expenses: totalExpenses(txns)
-    };
+    labels.push(MONTH_NAMES[month].substr(0, 3));
+    incomeData.push(totalIncome(txns));
+    expenseData.push(totalExpenses(txns));
   });
 
-  const maxVal = Math.max(...data.map(d => Math.max(d.income, d.expenses)), 1);
-
-  // Chart dimensions
-  const padding = { top: 16, right: 20, bottom: 36, left: 12 };
-  const chartW = width - padding.left - padding.right;
-  const chartH = height - padding.top - padding.bottom;
-  const groupWidth = chartW / data.length;
-  const barWidth = Math.min(groupWidth * 0.28, 24);
-  const gap = 4;
-
-  ctx.clearRect(0, 0, width, height);
-
-  // Draw horizontal grid lines
-  ctx.strokeStyle = borderColor;
-  ctx.lineWidth = 1;
-  const gridLines = 4;
-  for (let i = 0; i <= gridLines; i++) {
-    const yPos = padding.top + (chartH / gridLines) * i;
-    ctx.beginPath();
-    ctx.moveTo(padding.left, yPos);
-    ctx.lineTo(width - padding.right, yPos);
-    ctx.stroke();
-  }
-
-  // Draw bars
-  data.forEach((d, i) => {
-    const cx = padding.left + groupWidth * i + groupWidth / 2;
-
-    // Income bar
-    const incomeH = (d.income / maxVal) * chartH;
-    const ix = cx - barWidth - gap / 2;
-    const iy = padding.top + chartH - incomeH;
-    ctx.fillStyle = incomeColor;
-    roundedRect(ctx, ix, iy, barWidth, incomeH, 3);
-
-    // Expense bar
-    const expenseH = (d.expenses / maxVal) * chartH;
-    const ex = cx + gap / 2;
-    const ey = padding.top + chartH - expenseH;
-    ctx.fillStyle = expenseColor;
-    roundedRect(ctx, ex, ey, barWidth, expenseH, 3);
-
-    // Label
-    ctx.fillStyle = textColor;
-    ctx.font = '500 11px Inter, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(d.label, cx, height - padding.bottom + 20);
+  chartInstances.bar = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Income',
+          data: incomeData,
+          backgroundColor: colors.income,
+          borderRadius: 4,
+          barPercentage: 0.6,
+          categoryPercentage: 0.7
+        },
+        {
+          label: 'Expenses',
+          data: expenseData,
+          backgroundColor: colors.expense,
+          borderRadius: 4,
+          barPercentage: 0.6,
+          categoryPercentage: 0.7
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'top',
+          align: 'end',
+          labels: { font: chartFont(11), color: colors.text, boxWidth: 12, padding: 16 }
+        },
+        tooltip: {
+          ...chartTooltipConfig(colors),
+          callbacks: {
+            label: function (ctx) { return ctx.dataset.label + ': ' + formatCurrency(ctx.parsed.y); }
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: { font: chartFont(11), color: colors.text }
+        },
+        y: {
+          beginAtZero: true,
+          grid: { color: colors.border },
+          border: { display: false },
+          ticks: {
+            font: chartFont(11),
+            color: colors.text,
+            callback: function (val) { return '\u20B9' + val.toLocaleString('en-IN'); }
+          }
+        }
+      }
+    }
   });
-
-  // Legend
-  ctx.font = '500 11px Inter, sans-serif';
-  const legendY = 10;
-
-  ctx.fillStyle = incomeColor;
-  ctx.fillRect(width - 145, legendY, 10, 10);
-  ctx.fillStyle = textColor;
-  ctx.textAlign = 'left';
-  ctx.fillText('Income', width - 130, legendY + 9);
-
-  ctx.fillStyle = expenseColor;
-  ctx.fillRect(width - 72, legendY, 10, 10);
-  ctx.fillStyle = textColor;
-  ctx.fillText('Expense', width - 57, legendY + 9);
-}
-
-/** Helper: draw a rectangle with rounded top corners */
-function roundedRect(ctx, x, y, w, h, r) {
-  if (h <= 0) return;
-  r = Math.min(r, h / 2, w / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h);
-  ctx.lineTo(x, y + h);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
-  ctx.fill();
 }
 
 /** Draw donut chart: Expense breakdown by category */
 function drawDonutChart(month, year) {
   const canvas = document.getElementById('donut-chart');
-  const legendEl = document.getElementById('donut-legend');
-  if (!canvas || !legendEl) return;
+  if (!canvas) return;
+  destroyChart('donut');
 
+  const colors = getChartThemeColors();
   const monthTxns = getMonthlyTransactions(month, year);
   const expenses = monthTxns.filter(t => t.type === 'expense');
 
   if (expenses.length === 0) {
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = 180 * dpr;
-    canvas.height = 180 * dpr;
-    canvas.style.width = '180px';
-    canvas.style.height = '180px';
-    const ctx = canvas.getContext('2d');
-    ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, 180, 180);
-
-    const textColor = getComputedStyle(document.documentElement).getPropertyValue('--text-secondary').trim();
-    ctx.fillStyle = textColor;
-    ctx.font = '500 13px Inter, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('No expenses', 90, 90);
-
-    legendEl.innerHTML = '';
+    chartInstances.donut = new Chart(canvas, {
+      type: 'doughnut',
+      data: {
+        labels: ['No expenses'],
+        datasets: [{ data: [1], backgroundColor: [colors.inputBg], borderWidth: 0 }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: '65%',
+        plugins: { legend: { display: false }, tooltip: { enabled: false } }
+      }
+    });
     return;
   }
 
@@ -799,66 +812,341 @@ function drawDonutChart(month, year) {
     catTotals[t.category] = (catTotals[t.category] || 0) + t.amount;
   });
 
-  const totalExp = expenses.reduce((s, t) => s + t.amount, 0);
   const sorted = Object.entries(catTotals).sort((a, b) => b[1] - a[1]);
+  const labels = sorted.map(([catId]) => getCategoryById(catId).label);
+  const data = sorted.map(([, amount]) => amount);
+  const bgColors = sorted.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]);
+  const totalExp = data.reduce((s, v) => s + v, 0);
+  const legendPos = window.innerWidth <= 768 ? 'bottom' : 'right';
 
-  // Draw donut
-  const dpr = window.devicePixelRatio || 1;
-  const size = 180;
-  canvas.width = size * dpr;
-  canvas.height = size * dpr;
-  canvas.style.width = size + 'px';
-  canvas.style.height = size + 'px';
+  // Center-text plugin
+  const centerTextPlugin = {
+    id: 'centerText',
+    afterDraw: function (chart) {
+      const { ctx, chartArea } = chart;
+      if (!chartArea) return;
+      const cx = chartArea.left + chartArea.width / 2;
+      const cy = chartArea.top + chartArea.height / 2;
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = "700 16px 'Inter', sans-serif";
+      ctx.fillStyle = colors.textPrimary;
+      ctx.fillText(formatCurrency(totalExp), cx, cy - 6);
+      ctx.font = "400 10px 'Inter', sans-serif";
+      ctx.fillStyle = colors.text;
+      ctx.fillText('Total Expenses', cx, cy + 12);
+      ctx.restore();
+    }
+  };
 
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, size, size);
-
-  const cx = size / 2;
-  const cy = size / 2;
-  const outerR = (size / 2) - 4;
-  const innerR = outerR * 0.6;
-
-  let startAngle = -Math.PI / 2; // Start from top
-
-  sorted.forEach(([catId, amount], i) => {
-    const sliceAngle = (amount / totalExp) * Math.PI * 2;
-    ctx.beginPath();
-    ctx.arc(cx, cy, outerR, startAngle, startAngle + sliceAngle);
-    ctx.arc(cx, cy, innerR, startAngle + sliceAngle, startAngle, true);
-    ctx.closePath();
-    ctx.fillStyle = CHART_COLORS[i % CHART_COLORS.length];
-    ctx.fill();
-    startAngle += sliceAngle;
+  chartInstances.donut = new Chart(canvas, {
+    type: 'doughnut',
+    data: {
+      labels,
+      datasets: [{
+        data,
+        backgroundColor: bgColors,
+        borderWidth: 2,
+        borderColor: colors.cardBg,
+        hoverOffset: 6
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '65%',
+      plugins: {
+        legend: {
+          position: legendPos,
+          labels: {
+            font: chartFont(11),
+            color: colors.text,
+            boxWidth: 12,
+            padding: 10,
+            generateLabels: function (chart) {
+              const ds = chart.data.datasets[0];
+              return chart.data.labels.map(function (label, i) {
+                const pct = Math.round((ds.data[i] / totalExp) * 100);
+                return {
+                  text: label + '  ' + pct + '%',
+                  fillStyle: ds.backgroundColor[i],
+                  strokeStyle: 'transparent',
+                  lineWidth: 0,
+                  index: i
+                };
+              });
+            }
+          }
+        },
+        tooltip: {
+          ...chartTooltipConfig(colors),
+          callbacks: {
+            label: function (ctx) {
+              const pct = Math.round((ctx.parsed / totalExp) * 100);
+              return ' ' + formatCurrency(ctx.parsed) + ' (' + pct + '%)';
+            }
+          }
+        }
+      }
+    },
+    plugins: [centerTextPlugin]
   });
+}
 
-  // Center text
-  const bgColor = getComputedStyle(document.documentElement).getPropertyValue('--bg-card').trim();
-  const textColor = getComputedStyle(document.documentElement).getPropertyValue('--text-primary').trim();
+/** Draw trend line chart: Monthly expenses + income over 6 months */
+function drawTrendChart() {
+  const canvas = document.getElementById('trend-chart');
+  if (!canvas) return;
+  destroyChart('trend');
 
-  ctx.fillStyle = textColor;
-  ctx.font = '700 16px Inter, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(formatCurrency(totalExp), cx, cy - 2);
+  const colors = getChartThemeColors();
+  const months = [];
+  let m = state.analyticsMonth;
+  let y = state.analyticsYear;
+  for (let i = 0; i < 6; i++) {
+    months.unshift({ month: m, year: y });
+    m--;
+    if (m < 0) { m = 11; y--; }
+  }
 
-  const subColor = getComputedStyle(document.documentElement).getPropertyValue('--text-secondary').trim();
-  ctx.fillStyle = subColor;
-  ctx.font = '400 10px Inter, sans-serif';
-  ctx.fillText('Total Expenses', cx, cy + 14);
+  const labels = months.map(d => MONTH_NAMES[d.month].substr(0, 3));
+  const expData = months.map(d => totalExpenses(getMonthlyTransactions(d.month, d.year)));
+  const incData = months.map(d => totalIncome(getMonthlyTransactions(d.month, d.year)));
 
-  // Legend
-  legendEl.innerHTML = sorted.map(([catId, amount], i) => {
-    const cat = getCategoryById(catId);
-    const pct = Math.round((amount / totalExp) * 100);
-    return `
-      <div class="legend-item">
-        <span class="legend-dot" style="background: ${CHART_COLORS[i % CHART_COLORS.length]}"></span>
-        <span class="legend-label">${cat.label}</span>
-        <span class="legend-value">${pct}%</span>
-      </div>
-    `;
+  chartInstances.trend = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Expenses',
+          data: expData,
+          borderColor: colors.expense,
+          backgroundColor: colors.expense + '18',
+          fill: true,
+          tension: 0.35,
+          pointRadius: 4,
+          pointHoverRadius: 7,
+          pointBackgroundColor: colors.expense,
+          pointBorderColor: colors.cardBg,
+          pointBorderWidth: 2,
+          borderWidth: 2.5
+        },
+        {
+          label: 'Income',
+          data: incData,
+          borderColor: colors.income,
+          backgroundColor: 'transparent',
+          fill: false,
+          tension: 0.35,
+          pointRadius: 4,
+          pointHoverRadius: 7,
+          pointBackgroundColor: colors.income,
+          pointBorderColor: colors.cardBg,
+          pointBorderWidth: 2,
+          borderWidth: 2.5,
+          borderDash: [6, 3]
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'top',
+          align: 'end',
+          labels: { font: chartFont(11), color: colors.text, boxWidth: 12, padding: 16 }
+        },
+        tooltip: {
+          ...chartTooltipConfig(colors),
+          callbacks: {
+            label: function (ctx) { return ctx.dataset.label + ': ' + formatCurrency(ctx.parsed.y); }
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: { font: chartFont(11), color: colors.text }
+        },
+        y: {
+          beginAtZero: true,
+          grid: { color: colors.border },
+          border: { display: false },
+          ticks: {
+            font: chartFont(11),
+            color: colors.text,
+            callback: function (val) { return '\u20B9' + val.toLocaleString('en-IN'); }
+          }
+        }
+      }
+    }
+  });
+}
+
+/** Draw prediction chart: Last 3 actual months + predicted next month */
+function drawPredictionChart() {
+  const canvas = document.getElementById('prediction-chart');
+  if (!canvas) return;
+  destroyChart('prediction');
+
+  const colors = getChartThemeColors();
+  const now = new Date();
+
+  // Last 3 months actual data
+  const recentMonths = [];
+  for (let i = 2; i >= 0; i--) {
+    const ref = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    recentMonths.push({ month: ref.getMonth(), year: ref.getFullYear() });
+  }
+
+  const labels = recentMonths.map(d => MONTH_NAMES[d.month].substr(0, 3));
+  const actuals = recentMonths.map(d => totalExpenses(getMonthlyTransactions(d.month, d.year)));
+
+  // Predicted next month
+  const history = AIEngine.getMonthlyHistory(state.transactions, 12);
+  const predicted = AIEngine.predictExpense(history);
+  const nextRef = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  labels.push(MONTH_NAMES[nextRef.getMonth()].substr(0, 3) + ' (Est.)');
+
+  chartInstances.prediction = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Actual',
+          data: [...actuals, null],
+          backgroundColor: colors.accent,
+          borderRadius: 4,
+          barPercentage: 0.55
+        },
+        {
+          label: 'Predicted',
+          data: [null, null, null, predicted],
+          backgroundColor: colors.accent + '40',
+          borderColor: colors.accent,
+          borderWidth: 2,
+          borderDash: [5, 4],
+          borderRadius: 4,
+          barPercentage: 0.55
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'top',
+          align: 'end',
+          labels: { font: chartFont(11), color: colors.text, boxWidth: 12, padding: 16 }
+        },
+        tooltip: {
+          ...chartTooltipConfig(colors),
+          callbacks: {
+            label: function (ctx) { return ctx.dataset.label + ': ' + formatCurrency(ctx.parsed.y); }
+          }
+        }
+      },
+      scales: {
+        x: {
+          stacked: true,
+          grid: { display: false },
+          ticks: { font: chartFont(11), color: colors.text }
+        },
+        y: {
+          stacked: true,
+          beginAtZero: true,
+          grid: { color: colors.border },
+          border: { display: false },
+          ticks: {
+            font: chartFont(11),
+            color: colors.text,
+            callback: function (val) { return '\u20B9' + val.toLocaleString('en-IN'); }
+          }
+        }
+      }
+    }
+  });
+}
+
+// ===== AI DASHBOARD RENDERING =====
+
+/** Update the AI Prediction card on the dashboard */
+function renderAIPrediction() {
+  if (!aiAnalysis) return;
+
+  const predEl = document.getElementById('ai-predicted-expense');
+  const budEl = document.getElementById('ai-recommended-budget');
+  const savEl = document.getElementById('ai-savings-forecast');
+  const avgEl = document.getElementById('ai-avg-expense');
+  const confEl = document.getElementById('ai-confidence');
+
+  if (predEl) predEl.textContent = formatCurrency(aiAnalysis.predictedExpense);
+  if (budEl) budEl.textContent = formatCurrency(aiAnalysis.recommendedBudget);
+
+  if (savEl) {
+    savEl.textContent = (aiAnalysis.savingsForecast >= 0 ? '+' : '') + formatCurrency(aiAnalysis.savingsForecast);
+    savEl.className = 'ai-stat-value ' + (aiAnalysis.savingsForecast >= 0 ? 'income-text' : 'expense-text');
+  }
+
+  if (avgEl) avgEl.textContent = formatCurrency(aiAnalysis.avgMonthlyExpense);
+
+  if (confEl) {
+    confEl.textContent = aiAnalysis.confidence + '%';
+    confEl.setAttribute('data-confidence',
+      aiAnalysis.confidence >= 70 ? 'high' : (aiAnalysis.confidence >= 40 ? 'medium' : 'low')
+    );
+  }
+}
+
+/** Render AI Financial Insights list */
+function renderAIInsights() {
+  const container = document.getElementById('ai-insights-content');
+  if (!container) return;
+
+  if (!aiAnalysis || aiAnalysis.insights.length === 0) {
+    container.innerHTML = '<div class="empty-state"><p>Add transactions to receive AI insights</p></div>';
+    return;
+  }
+
+  container.innerHTML = aiAnalysis.insights.map(function (ins) {
+    return '<div class="insight-item insight-' + ins.type + '">' +
+      '<span class="insight-icon">' + ins.icon + '</span>' +
+      '<span class="insight-message">' + ins.message + '</span>' +
+    '</div>';
   }).join('');
+}
+
+/** Render Smart Alerts banner at top of dashboard */
+function renderSmartAlerts() {
+  const bar = document.getElementById('smart-alerts');
+  if (!bar) return;
+
+  if (!aiAnalysis || aiAnalysis.alerts.length === 0) {
+    bar.classList.add('hidden');
+    bar.innerHTML = '';
+    return;
+  }
+
+  bar.classList.remove('hidden');
+  bar.innerHTML = aiAnalysis.alerts.map(function (alert) {
+    return '<div class="alert-item alert-' + alert.severity + '">' +
+      '<span class="alert-icon">' + alert.icon + '</span>' +
+      '<span class="alert-message">' + alert.message + '</span>' +
+    '</div>';
+  }).join('') +
+  '<button class="alert-dismiss-btn" id="dismiss-alerts" title="Dismiss">&times;</button>';
+
+  var dismissBtn = document.getElementById('dismiss-alerts');
+  if (dismissBtn) {
+    dismissBtn.addEventListener('click', function () {
+      bar.classList.add('hidden');
+    });
+  }
 }
 
 // ===== TRANSACTION MODAL =====
@@ -1020,9 +1308,8 @@ function closeBudgetModal() {
 
 function handleBudgetSubmit(e) {
   e.preventDefault();
-  const inputVal = document.getElementById('budget-amount').value;
-  const amount = parseFloat(inputVal);
-  if (inputVal === '' || isNaN(amount) || amount < 0) return;
+  const amount = parseFloat(document.getElementById('budget-amount').value);
+  if (!amount || amount <= 0) return;
 
   state.budget = amount;
   persistState();
@@ -1220,13 +1507,15 @@ function init() {
   loadState();
   applyTheme(state.theme);
   populateFilterCategories();
+  runAIAnalysis();
 
   if (state.user && state.user.pin) {
     // Show login for PIN verification
     showLogin();
-    // Pre-fill name but keep it editable
+    // Pre-fill name
     document.getElementById('login-name').value = state.user.name;
-    document.getElementById('login-btn').textContent = 'Unlock / Sign In';
+    document.getElementById('login-name').setAttribute('readonly', true);
+    document.getElementById('login-btn').textContent = 'Unlock';
   } else {
     showLogin();
   }
